@@ -128,7 +128,16 @@ void generatePoints (uint64_t * pSums, uint64_t pSumSize, uint64_t sampleSize) {
 
 __global__ 
 void reduceCounts (uint64_t * pSums, uint64_t * totals, uint64_t pSumSize, uint64_t reduceSize) {
-	//	Insert code here
+
+	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	uint64_t partialHitCount = 0;
+	uint64_t n = pSumSize / reduceSize;
+	if(idx < reduceSize){
+		for(int i = 0; i < n; i++)
+			partialHitCount += pSums[idx + i];
+
+		totals[idx] = partialHitCount;
+	}
 }
 
 int runGpuMCPi (uint64_t generateThreadCount, uint64_t sampleSize, 
@@ -165,17 +174,21 @@ double estimatePi(uint64_t generateThreadCount, uint64_t sampleSize,
 	//      Insert code here
 	// std::cout << "Sneaky, you are ...\n";
 	// std::cout << "Compute pi, you must!\n";
-	uint64_t * pSum, * pSum_d;
-	pSum = (uint64_t *) malloc(generateThreadCount * sizeof(uint64_t));
+	uint64_t * pSum_d, * totals, * totals_d;
 	cudaMalloc((void **) &pSum_d, generateThreadCount * sizeof(uint64_t));
+	cudaMalloc((void **) &totals_d, reduceThreadCount * sizeof(uint64_t));
+	totals = (uint64_t *) malloc(reduceThreadCount * sizeof(uint64_t));
 
 	// Kernel launch
 	generatePoints<<<ceil(float(generateThreadCount) / 1024), 1024>>>(pSum_d, generateThreadCount, sampleSize);
+	reduceCounts<<<ceil(float(reduceThreadCount) / 1024), 1024>>>(pSum_d, totals_d, generateThreadCount, reduceThreadCount);
 
-	cudaMemcpy(pSum, pSum_d, generateThreadCount * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+	cudaMemcpy(totals, totals_d, reduceThreadCount * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+	cudaFree(pSum_d);
+	cudaFree(totals_d);
 
-	for (int i = 0; i < generateThreadCount; i++)
-		totalHitCount += pSum[i];
+	for (int i = 0; i < reduceThreadCount; i++)
+		totalHitCount += totals[i];
 
 	approxPi = ((double) totalHitCount / sampleSize) / generateThreadCount;
 	approxPi = approxPi * 4.0f;
